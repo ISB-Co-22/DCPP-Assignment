@@ -10,11 +10,11 @@ df_SeedSheet = pd.read_excel("Indian Stocks Dump.xlsx", "Seed Stock Sheet")
 # Load Data Frame 2 with data from Web ( Twitter & MoneyControl)
 df_WebData = pd.read_excel("Indian Stocks Dump.xlsx", "Web & Social Data")
 
-# Load Data Frame 3 with additional Stock Parameters
-df_AdditionalData = pd.read_excel("Indian Stocks Dump.xlsx", "Additional Stock Metrics")
+# Load Data Frame 3 with Nifty Data ( NSE1)
+df_Nifty50Stocks = pd.read_excel("Indian Stocks Dump.xlsx", "Nifty50")
 
-# Cast Ticker & ISIN to String column types
-df_AdditionalData = df_AdditionalData.astype({'Ticker':'string', 'ISIN':'string'})
+# Load Data Frame 4 with additional NSE Stock Parameters
+df_AdditionalData = pd.read_excel("Indian Stocks Dump.xlsx", "Additional Stock Metrics")
 
 # Merge the Web Data - df_WebData into the main Seed sheet
 df_mergedWebData = pd.merge(df_SeedSheet, df_WebData[
@@ -29,28 +29,50 @@ df_mergedWebData = pd.merge(df_SeedSheet, df_WebData[
      'Twitter Created Date',
      'Twitter Account Age (Years)']],  on = 'Company', how = 'left')
 
-     # Capture all the Duplicated data per sheet
-df_duplicate_SeednWebData = df_mergedWebData[df_mergedWebData.duplicated('ISIN')]
-df_duplicate_AddData_ISIN = df_AdditionalData[df_AdditionalData.duplicated('ISIN')]
-df_duplicate_AddData_Ticker = df_AdditionalData[df_AdditionalData.duplicated('Ticker')]
-with pd.ExcelWriter('Duplicate Data.xlsx') as writer:  
-    df_duplicate_SeednWebData.to_excel(writer, sheet_name='Seed Data')
-    df_duplicate_AddData_ISIN.to_excel(writer, sheet_name='Add Data ISIN')
-    df_duplicate_AddData_Ticker.to_excel(writer, sheet_name='Add Data Ticker')
+# Load Data Frame 5 with additional NSE ISIN
+df_NseISIN = pd.read_csv("EQUITY_L.csv")
 
-    # Drop NaN ISIN values from the Seed Data
+# Merge the Web Data - df_WebData into the main Seed sheet
+df_mergedWebData = pd.merge(df_SeedSheet, df_WebData[
+    ['Company',
+     'Moneycontrol Link',
+     'Website',
+     'Email',
+     'Twitter Link',
+     'Twitter Handle',
+     'Twitter Followers',
+     'Twitter Posts',
+     'Twitter Created Date',
+     'Twitter Account Age (Years)']],  on = 'Company', how = 'left')
+
+# Map the obsolete ISIN with latest ISIN
+key_list = list(df_mergedWebData[~df_mergedWebData['NSE code'].isnull()]['NSE code'])
+dict_lookup = dict_lookup = dict(zip(df_NseISIN['SYMBOL'], df_NseISIN['ISIN']))
+df_mergedWebData['ISIN'] = df_mergedWebData['NSE code'].map(dict_lookup).fillna(df_mergedWebData['ISIN'])
+
+# Drop NaN ISIN values from the Merged Sheet Data
 list_IndexToRemove = df_mergedWebData.index[df_mergedWebData['ISIN'].isna()]
 df_mergedWebData.drop(list_IndexToRemove, 0, inplace = True)
 
+# Cast Ticker & ISIN to String column types
+df_AdditionalData = df_AdditionalData.astype({'Ticker':'string', 'ISIN':'string'})
+
 # Drop duplicate Tickers / ISIN from the Additional Sheet 
 df_AdditionalData.drop_duplicates(subset = ['ISIN'], keep = 'first', inplace = True )
+
 # Drop NaN ISIN from the Additional Sheet
 list_IndexToRemove_NA = df_AdditionalData.index[df_AdditionalData['ISIN'].isna()]
 df_AdditionalData.drop(list_IndexToRemove_NA, 0, inplace = True)
 
 # Remove the Funds & ETF data ( starts with INF***** instead of INE*** )from the Additional Data Sheet
 list_IndexOfNonStocks = df_AdditionalData.index[~df_AdditionalData['ISIN'].str.startswith('INE')]
-df_AdditionalData.drop(list_IndexOfNonStocks, 0, inplace=True)
+df_AdditionalData.drop(list_IndexOfNonStocks, 0, inplace = True)
+
+# Merge the Nifty50 - df_Nifty50Stocks into the merged web Sheet
+df_mergedWebData = pd.merge(df_mergedWebData, df_Nifty50Stocks[
+    ['ISIN',
+     'Nifty 50 Stock']],  on = 'ISIN', how = 'left')
+
 
 # Merge the Additional metrics data with the merged data frame ( seed and Web)
 df_WebAndMoreData = pd.merge(df_mergedWebData, df_AdditionalData[
@@ -64,5 +86,24 @@ df_WebAndMoreData = pd.merge(df_mergedWebData, df_AdditionalData[
      'Rating agency Buy Reco',
      'Volatility', 
      'Total Debt']], on = 'ISIN', how = 'outer', indicator='true')
+
+# Cleanup Stocks that are not actively traded. These are the stocks that were not found in the Seed Sheet
+List_indexOfInactiveStocks = df_WebAndMoreData.index[df_WebAndMoreData['Company'].isnull()]
+df_WebAndMoreData.drop(List_indexOfInactiveStocks, 0, inplace = True)
+
+
+# Remove the Stocks for whom the Earnings & Book Values is not available as it would be difficult to evaluate such companies
+List_indexOfStksWithMissingBookVal = df_WebAndMoreData.index[(df_WebAndMoreData['Earning Per Share'].isnull())
+                                                            | (df_WebAndMoreData['Book Value Per Share'].isnull())
+                                                            | (df_WebAndMoreData['Cash Flow Per Share'].isnull())]
+
+df_WebAndMoreData.drop(List_indexOfStksWithMissingBookVal, 0, inplace = True)
+
+
+# Fill in the missing values of Price to Earning given that the Price and EPS info is already present
+df_WebAndMoreData['Price to Earnings'] = df_WebAndMoreData['Price'] / df_WebAndMoreData['Earning Per Share']
+
+# Final Excel and JSON Creation
+df_WebAndMoreData.sort_values('Market Cap(Cr)', ascending = True).to_json("StockRefinedData.json", orient = 'index')
 
 df_WebAndMoreData.to_excel("Merged Social & Additional Data.xlsx")
